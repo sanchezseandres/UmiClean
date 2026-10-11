@@ -1,5 +1,6 @@
-from flask import Flask, render_template_string, redirect
-import os
+from flask import Flask, render_template_string, redirect, request, jsonify
+import os, json, hashlib, threading, time
+import urllib.request
 
 app = Flask(__name__)
 
@@ -13,7 +14,34 @@ SHIPPING_COST = 20000
 PRICE_OXIGENO    = 25000
 PRICE_KIT        = 25000
 PRICE_GEL        = 25000
-WOMPI_PUBLIC_KEY = "pub_prod_L0He5xTVgLMd2bWAY6r5u8PTl4m4BU0K"
+# Usados por las páginas de políticas (no se venden aún)
+PRICE_SUAVIZANTE = 25000
+PRICE_DETERGENTE = 25000
+
+FREE_SHIPPING_MIN = 75000
+
+# =========================
+# WOMPI
+# =========================
+# Llave pública (se puede ver en el navegador, no es secreta)
+WOMPI_PUBLIC_KEY = os.environ.get("WOMPI_PUBLIC_KEY", "pub_prod_L0He5xTVgLMd2bWAY6r5u8PTl4m4BU0K")
+# SECRETOS: configúralos SOLO como variables de entorno en Railway, nunca en el código.
+# Dashboard Wompi → Desarrolladores → Secretos para integración técnica
+WOMPI_INTEGRITY_SECRET = os.environ.get("WOMPI_INTEGRITY_SECRET", "")   # prod_integrity_...
+WOMPI_EVENTS_SECRET    = os.environ.get("WOMPI_EVENTS_SECRET", "")      # prod_events_...
+WOMPI_API = ("https://production.wompi.co/v1" if WOMPI_PUBLIC_KEY.startswith("pub_prod_")
+             else "https://sandbox.wompi.co/v1")
+
+# Catálogo del lado del servidor: el precio que se cobra sale de aquí, no del navegador
+CATALOGO = {
+    ("product", "oxigeno"): ("Oxígeno Activo Fórmula Ultra", PRICE_OXIGENO, False),
+    ("product", "kit"):     ("Shoe Cleaner Kit",              PRICE_KIT,     False),
+    ("product", "gel"):     ("Gel Oxigenado 2L",              PRICE_GEL,     False),
+    ("promo", "p1"): ("Combo Total (Oxígeno + Kit + Gel)", 50000, True),
+    ("promo", "p2"): ("Combo Medias (Oxígeno + Gel)",      35000, True),
+    ("promo", "p3"): ("Combo Zapatos (Kit + Gel)",         35000, True),
+    ("promo", "p4"): ("Combo Completo (Los 3 productos)",  50000, True),
+}
 
 # =========================
 # IMÁGENES EMBEBIDAS (base64)
@@ -578,7 +606,20 @@ BASE_HTML = r"""
       onmouseout="this.querySelector('.blog-overlay').style.opacity='0'">
       <!-- fondo abstracto SVG -->
       <div style="position:absolute;inset:0;background:linear-gradient(160deg,#0d2b52 0%,#1a4080 40%,#0a1e38 100%)">
-        <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:.18" viewBox="0 0 600 600" xmlns="http://www.
+        <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:.18" viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="480" cy="120" r="160" fill="#00c9a7"/>
+          <circle cx="120" cy="480" r="200" fill="#3a9bd5"/>
+        </svg>
+      </div>
+      <div class="blog-overlay" style="position:absolute;inset:0;background:rgba(0,201,167,.08);opacity:0;transition:opacity .3s"></div>
+      <div style="position:relative;padding:36px">
+        <span style="font-size:.7rem;font-weight:900;letter-spacing:.2em;text-transform:uppercase;color:#00c9a7">Destacado</span>
+        <h3 style="font-family:'Syne',sans-serif;color:white;font-size:1.8rem;font-weight:900;margin:10px 0;line-height:1.15">Por qué el oxígeno activo limpia sin dañar tus telas</h3>
+        <p style="color:rgba(255,255,255,.75);font-size:.95rem;line-height:1.6">Elimina manchas y olores liberando oxígeno, sin el desgaste ni los vapores del cloro.</p>
+      </div>
+    </article>
+  </div>
+</section>
 
 <!-- MODAL DATOS CLIENTE -->
 <div id="modal-datos" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;padding:20px">
@@ -770,52 +811,54 @@ BASE_HTML = r"""
     pagarWompi();
   }
 
-  function pagarWompi() {
+  async function pagarWompi() {
     if(cart.length === 0) { alert("Tu carrito está vacío."); return; }
-    const ref = "UMI-" + Date.now();
-    const totalCents = total() * 100;
+    const btn = document.getElementById("pay-btn");
+    btn.disabled = true; btn.textContent = "Preparando pago...";
 
-    // Guardar pedido en servidor antes de pagar
-    const pedido = {
-      ref,
-      cliente: clienteData,
-      items: cart,
-      subtotal: subtotal(),
-      envio: shipping(),
-      total: total()
-    };
-    localStorage.setItem("pedido_umi", JSON.stringify(pedido));
+    try {
+      // 1. El servidor recalcula el total, guarda el pedido y firma la transacción
+      const r = await fetch("/wompi/iniciar", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          cliente: clienteData,
+          items: cart.map(i => ({type: i.type, key: i.key, qty: i.qty}))
+        })
+      });
+      const d = await r.json();
+      if(!r.ok || !d.ok) throw new Error(d.error || "No se pudo iniciar el pago");
 
-    var checkout = new WidgetCheckout({
-      currency: "COP",
-      amountInCents: totalCents,
-      reference: ref,
-      publicKey: "{{ wompi_key }}",
-      redirectUrl: window.location.origin + "/gracias?ref=" + ref,
-      customerData: {
-        email: clienteData.email,
-        fullName: clienteData.nombre,
-        phoneNumber: clienteData.celular,
-        phoneNumberPrefix: "+57"
-      }
-    });
-    checkout.open(function(result) {
-      if(result.transaction && result.transaction.status === "APPROVED") {
-        // Enviar pedido al servidor
-        fetch("/pedido", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(pedido)
-        });
-        window.location.href = "/gracias?ref=" + ref;
-      }
-    });
+      // 2. Abrir el widget de Wompi con la firma de integridad
+      const wc = new WidgetCheckout({
+        currency: "COP",
+        amountInCents: d.amountInCents,
+        reference: d.reference,
+        publicKey: d.publicKey,
+        signature: { integrity: d.signature },
+        redirectUrl: window.location.origin + "/gracias",
+        customerData: {
+          email: clienteData.email,
+          fullName: clienteData.nombre,
+          phoneNumber: clienteData.celular.replace(/\D/g, ""),
+          phoneNumberPrefix: "+57"
+        }
+      });
+      wc.open(function(result) {
+        // La confirmación real la hace el servidor consultando a Wompi
+        const tx = result && result.transaction;
+        if(tx && tx.id) window.location.href = "/gracias?id=" + encodeURIComponent(tx.id);
+      });
+    } catch(e) {
+      alert("Error: " + e.message + ". Intenta de nuevo o escríbenos por WhatsApp.");
+    } finally {
+      btn.disabled = false; btn.textContent = "💳 Pagar con Wompi";
+    }
   }
 
   document.addEventListener("DOMContentLoaded", () => {
     render();
     document.getElementById("overlay").addEventListener("click", closeCart);
-    document.getElementById("pay-btn").addEventListener("click", checkout);
   });
 </script>
 </body>
@@ -838,6 +881,12 @@ def render_page():
         img_gel=IMG_GEL,
         wompi_key=WOMPI_PUBLIC_KEY,
     )
+
+
+@app.context_processor
+def variables_comunes():
+    # Para que todas las páginas (incluidas políticas) tengan lo que usa el carrito
+    return dict(wompi_key=WOMPI_PUBLIC_KEY, price_gel=PRICE_GEL, img_gel=IMG_GEL)
 
 
 @app.route("/")
@@ -995,7 +1044,7 @@ import random, string
 SMTP_SERVER   = "smtp.titan.email"
 SMTP_PORT     = 465
 SMTP_USER     = "noreply@umiclean.co"
-SMTP_PASSWORD = "123pariS…"  # <-- tu contraseña de Titan aquí
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")  # configúrala en Railway
 
 def send_order_email(to_email, to_name, order_items, order_total, order_id):
     try:
@@ -1008,7 +1057,7 @@ def send_order_email(to_email, to_name, order_items, order_total, order_id):
         items_html = "".join([
             f"<tr><td style='padding:8px;border-bottom:1px solid #eee'>{it['name']}</td>"
             f"<td style='padding:8px;border-bottom:1px solid #eee;text-align:right'>x{it['qty']}</td>"
-            f"<td style='padding:8px;border-bottom:1px solid #eee;text-align:right'>${it['total']:,} COP</td></tr>"
+            f"<td style='padding:8px;border-bottom:1px solid #eee;text-align:right'>${it.get('total', it.get('price',0)*it.get('qty',1)):,} COP</td></tr>"
             for it in order_items
         ])
 
@@ -1043,7 +1092,7 @@ def send_order_email(to_email, to_name, order_items, order_total, order_id):
               </tfoot>
             </table>
             <div style="background:#e8f5e9;border-left:4px solid #00c9a7;padding:16px;border-radius:0 8px 8px 0;margin:20px 0">
-              <p style="margin:0;color:#2e7d32;font-size:.9rem">💬 <strong>Próximo paso:</strong> Te contactaremos por WhatsApp al número que nos dejaste para coordinar el pago y la entrega.</p>
+              <p style="margin:0;color:#2e7d32;font-size:.9rem">💬 <strong>Próximo paso:</strong> Tu pago fue aprobado. Te contactaremos por WhatsApp para coordinar la entrega.</p>
             </div>
             <p style="text-align:center;color:#888;font-size:.8rem;margin-top:24px">
               © 2025 UmiClean · Bogotá, Colombia · <a href="https://umiclean.co" style="color:#0d2b52">umiclean.co</a>
@@ -1096,8 +1145,8 @@ THANKS_HTML = """
 <body>
   <div class="card">
     <div class="top">
-      <div class="checkmark">✅</div>
-      <h1>¡Pedido recibido!</h1>
+      <div class="checkmark">{{ icono }}</div>
+      <h1>{{ titulo }}</h1>
       <p>Gracias por confiar en UmiClean 🫧</p>
     </div>
     <div class="body">
@@ -1107,7 +1156,7 @@ THANKS_HTML = """
         <div class="date">{{ fecha }}</div>
       </div>
       <div class="info">
-        💬 <strong>Próximo paso:</strong> Te contactaremos por WhatsApp para coordinar el pago y la entrega. ¡Revisa tus mensajes!
+        {{ mensaje|safe }}
       </div>
       <a href="https://wa.me/{{ whatsapp_number }}" class="btn" target="_blank">💬 Escribirnos por WhatsApp</a>
       <a href="/" class="btn2">← Volver a la tienda</a>
@@ -1118,28 +1167,168 @@ THANKS_HTML = """
 </html>
 """
 
+# =========================
+# WOMPI: almacenamiento simple de pedidos
+# =========================
+PEDIDOS_FILE = os.environ.get("PEDIDOS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pedidos.json"))
+_lock = threading.Lock()
+
+def _cargar_pedidos():
+    try:
+        with open(PEDIDOS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _guardar_pedidos(pedidos):
+    tmp = PEDIDOS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(pedidos, f, ensure_ascii=False)
+    os.replace(tmp, PEDIDOS_FILE)
+
+def calcular_pedido(items_in):
+    """Recalcula precios con el catálogo del servidor."""
+    items, subtotal, envio_gratis = [], 0, False
+    for it in items_in or []:
+        k = (str(it.get("type")), str(it.get("key")))
+        if k not in CATALOGO:
+            raise ValueError("Producto inválido")
+        qty = int(it.get("qty", 1))
+        if qty < 1 or qty > 50:
+            raise ValueError("Cantidad inválida")
+        nombre, precio, gratis = CATALOGO[k]
+        items.append({"type": k[0], "key": k[1], "name": nombre, "price": precio, "qty": qty, "total": precio * qty})
+        subtotal += precio * qty
+        envio_gratis = envio_gratis or gratis
+    if not items:
+        raise ValueError("Carrito vacío")
+    envio = 0 if (envio_gratis or subtotal >= FREE_SHIPPING_MIN) else SHIPPING_COST
+    return items, subtotal, envio, subtotal + envio
+
+def firma_integridad(referencia, monto_centavos, moneda="COP"):
+    cadena = f"{referencia}{monto_centavos}{moneda}{WOMPI_INTEGRITY_SECRET}"
+    return hashlib.sha256(cadena.encode("utf-8")).hexdigest()
+
+def consultar_transaccion(tx_id):
+    url = f"{WOMPI_API}/transactions/{urllib.request.quote(str(tx_id))}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {WOMPI_PUBLIC_KEY}"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8")).get("data", {})
+
+def registrar_transaccion(tx):
+    """Actualiza el pedido según la transacción de Wompi. Envía correos una sola vez si quedó APPROVED."""
+    ref = tx.get("reference")
+    status = tx.get("status")
+    enviar = None
+    with _lock:
+        pedidos = _cargar_pedidos()
+        p = pedidos.get(ref)
+        if not p:
+            return None
+        if status == "APPROVED" and int(tx.get("amount_in_cents", -1)) != p["amount_in_cents"]:
+            status = "MONTO_INVALIDO"
+        p["status"] = status
+        p["transaction_id"] = tx.get("id")
+        if status == "APPROVED" and not p.get("correos_enviados"):
+            p["correos_enviados"] = True
+            enviar = dict(p)
+        _guardar_pedidos(pedidos)
+    if enviar:
+        try:
+            enviar_correos_pedido(enviar)
+        except Exception as e:
+            print(f"Error enviando correos {ref}: {e}")
+    return p
+
+
+@app.route("/wompi/iniciar", methods=["POST"])
+def wompi_iniciar():
+    if not WOMPI_INTEGRITY_SECRET:
+        return jsonify({"ok": False, "error": "Pagos no configurados (falta WOMPI_INTEGRITY_SECRET)"}), 500
+    data = request.get_json(silent=True) or {}
+    cliente = {k: str((data.get("cliente") or {}).get(k, "")).strip()[:200]
+               for k in ("nombre", "celular", "email", "direccion", "ciudad")}
+    if not all(cliente.values()):
+        return jsonify({"ok": False, "error": "Faltan datos del cliente"}), 400
+    try:
+        items, subtotal, envio, total = calcular_pedido(data.get("items"))
+    except (ValueError, TypeError) as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    ref = f"UMI-{int(time.time()*1000)}-{''.join(random.choices(string.ascii_uppercase + string.digits, k=4))}"
+    cents = total * 100
+    with _lock:
+        pedidos = _cargar_pedidos()
+        pedidos[ref] = {
+            "ref": ref, "cliente": cliente, "items": items, "subtotal": subtotal,
+            "envio": envio, "total": total, "amount_in_cents": cents,
+            "status": "PENDING", "creado": datetime.now().isoformat(timespec="seconds"),
+        }
+        _guardar_pedidos(pedidos)
+
+    return jsonify({
+        "ok": True, "reference": ref, "amountInCents": cents,
+        "publicKey": WOMPI_PUBLIC_KEY, "signature": firma_integridad(ref, cents),
+    })
+
+
+@app.route("/wompi/eventos", methods=["POST"])
+def wompi_eventos():
+    """Webhook de Wompi: configura esta URL en el dashboard → Desarrolladores → URL de eventos."""
+    ev = request.get_json(silent=True) or {}
+    try:
+        sig = ev.get("signature", {})
+        valores = ""
+        for prop in sig.get("properties", []):
+            v = ev.get("data", {})
+            for parte in prop.split("."):
+                v = v.get(parte, "")
+            valores += str(v)
+        esperado = hashlib.sha256(f"{valores}{ev.get('timestamp','')}{WOMPI_EVENTS_SECRET}".encode()).hexdigest()
+        if not WOMPI_EVENTS_SECRET or esperado.lower() != str(sig.get("checksum", "")).lower():
+            return jsonify({"ok": False}), 401
+        if ev.get("event") == "transaction.updated":
+            registrar_transaccion(ev["data"]["transaction"])
+    except Exception as e:
+        print(f"Error webhook Wompi: {e}")
+    return jsonify({"ok": True})
+
+
 @app.route("/gracias")
 def gracias():
-    order_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    tx_id = request.args.get("id", "")
     fecha = datetime.now().strftime("%d/%m/%Y · %I:%M %p")
+    estado, ref = None, "—"
+    if tx_id:
+        try:
+            tx = consultar_transaccion(tx_id)
+            ref = tx.get("reference", "—")
+            p = registrar_transaccion(tx)
+            estado = p["status"] if p else tx.get("status")
+        except Exception as e:
+            print(f"Error consultando transacción {tx_id}: {e}")
+
+    if estado == "APPROVED":
+        icono, titulo = "✅", "¡Pago aprobado!"
+        mensaje = "💬 <strong>Próximo paso:</strong> Te enviamos la confirmación a tu correo y te contactaremos por WhatsApp para coordinar la entrega."
+    elif estado == "PENDING":
+        icono, titulo = "⏳", "Pago en proceso"
+        mensaje = "Tu pago está siendo procesado. Cuando se apruebe te llegará la confirmación a tu correo."
+    elif estado in ("DECLINED", "VOIDED", "ERROR", "MONTO_INVALIDO"):
+        icono, titulo = "❌", "Pago no aprobado"
+        mensaje = "Tu pago no fue aprobado y no se realizó ningún cobro. Puedes intentarlo de nuevo o escribirnos por WhatsApp."
+    else:
+        icono, titulo = "ℹ️", "Estamos verificando tu pago"
+        mensaje = "No pudimos confirmar el estado del pago todavía. Si se realizó el cobro, escríbenos por WhatsApp con tu referencia."
+
     return render_template_string(
-        THANKS_HTML,
-        order_id=order_id,
-        fecha=fecha,
-        whatsapp_number=WHATSAPP_NUMBER
+        THANKS_HTML, order_id=ref, fecha=fecha, whatsapp_number=WHATSAPP_NUMBER,
+        icono=icono, titulo=titulo, mensaje=mensaje,
     )
 
 
-
-@app.route("/pedido", methods=["POST"])
-def pedido():
-    from flask import request, jsonify
-    import json, random, string
-    from datetime import datetime
-
-    data = request.get_json()
-    if not data:
-        return jsonify({"ok": False}), 400
+def enviar_correos_pedido(data):
+    """Envía el correo al cliente y la notificación al admin. Solo se llama con pagos APROBADOS."""
 
     ref        = data.get("ref", "SIN-REF")
     cliente    = data.get("cliente", {})
@@ -1247,7 +1436,8 @@ def pedido():
     except Exception as e:
         print(f"Error email admin: {e}")
 
-    return jsonify({"ok": True, "ref": ref})
+
+
 
 
 @app.route("/portafolio")
