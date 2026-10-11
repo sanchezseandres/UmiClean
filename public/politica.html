@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>{{ titulo }} · UmiClean</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@400;600&display=swap" rel="stylesheet"/>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Inter",sans-serif;background:#f7f9fc;color:#5a6d84}
+    header{background:#0d2b52;padding:18px 24px}
+    header a{color:white;font-family:"Syne",sans-serif;font-weight:800;font-size:1.3rem;text-decoration:none}
+    main{max-width:760px;margin:60px auto 80px;padding:0 24px}
+    h1{font-family:"Syne",sans-serif;color:#0d2b52;font-size:2rem;margin-bottom:16px}
+    .box{background:white;border-radius:20px;padding:32px;border:1px solid rgba(13,43,82,.10);box-shadow:0 8px 32px rgba(13,43,82,.07);line-height:1.7}
+    .volver{margin-top:20px;text-align:center}
+    .volver a{color:#1a56a0;font-weight:600}
+  </style>
+</head>
+<body>
+  <header><a href="/">UmiClean</a></header>
+  <main>
+    {{ contenido|safe }}
+    <p class="volver"><a href="/">← Volver a la tienda</a></p>
+  </main>
+</body>
+</html>

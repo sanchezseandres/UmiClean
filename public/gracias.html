@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>¡Gracias por tu compra! · UmiClean</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:"Inter",sans-serif;background:#f7f9fc;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{background:white;border-radius:24px;box-shadow:0 20px 60px rgba(13,43,82,.12);max-width:520px;width:100%;overflow:hidden;animation:pop .5s ease}
+    @keyframes pop{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+    .top{background:linear-gradient(135deg,#0d2b52,#1a4080);padding:40px 32px;text-align:center}
+    .checkmark{width:72px;height:72px;background:#00c9a7;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:2rem;box-shadow:0 8px 24px rgba(0,201,167,.4)}
+    .top h1{font-family:"Syne",sans-serif;color:white;font-size:1.8rem;margin-bottom:8px}
+    .top p{color:rgba(255,255,255,.7);font-size:.95rem}
+    .body{padding:32px}
+    .order-id{background:#f0f4ff;border-radius:12px;padding:16px;text-align:center;margin-bottom:24px}
+    .order-id .label{font-size:.75rem;color:#888;text-transform:uppercase;letter-spacing:.15em;margin-bottom:4px}
+    .order-id .num{font-family:"Syne",sans-serif;font-size:1.6rem;font-weight:800;color:#0d2b52}
+    .order-id .date{font-size:.82rem;color:#888;margin-top:4px}
+    .info{background:#e8f5f0;border-left:3px solid #00c9a7;padding:14px 16px;border-radius:0 10px 10px 0;margin-bottom:24px;font-size:.9rem;color:#2e7d32;line-height:1.6}
+    .btn{display:block;background:#25d366;color:white;text-align:center;padding:16px;border-radius:999px;font-weight:700;font-size:1rem;text-decoration:none;box-shadow:0 8px 20px rgba(37,211,102,.3);margin-bottom:12px}
+    .btn2{display:block;background:#0d2b52;color:white;text-align:center;padding:16px;border-radius:999px;font-weight:700;font-size:1rem;text-decoration:none}
+    .footer{text-align:center;color:#aaa;font-size:.8rem;margin-top:20px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="top">
+      <div class="checkmark">{{ icono }}</div>
+      <h1>{{ titulo }}</h1>
+      <p>Gracias por confiar en UmiClean 🫧</p>
+    </div>
+    <div class="body">
+      <div class="order-id">
+        <div class="label">Número de pedido</div>
+        <div class="num">#{{ order_id }}</div>
+        <div class="date">{{ fecha }}</div>
+      </div>
+      <div class="info">
+        {{ mensaje|safe }}
+      </div>
+      <a href="https://wa.me/{{ whatsapp_number }}" class="btn" target="_blank">💬 Escribirnos por WhatsApp</a>
+      <a href="/" class="btn2">← Volver a la tienda</a>
+      <div class="footer">© 2025 UmiClean · umiclean.co</div>
+    </div>
+  </div>
+</body>
+</html>
