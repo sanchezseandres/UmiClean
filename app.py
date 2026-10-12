@@ -14,8 +14,9 @@ Variables de entorno (Railway → web → Variables):
   WOMPI_EVENTS_SECRET     → prod_events_...     (para el webhook)
   SMTP_PASSWORD           → contraseña de noreply@umiclean.co
 """
-import os, json, time, random, string, hashlib, threading, smtplib, urllib.request
-from datetime import datetime
+import os, json, time, random, string, hashlib, hmac, threading, smtplib, urllib.request
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -71,6 +72,14 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 # =========================
 # UTILIDADES
 # =========================
+TZ = ZoneInfo("America/Bogota")
+
+
+def ahora():
+    """Hora de Colombia (el servidor de Railway está en UTC)."""
+    return datetime.now(TZ)
+
+
 def cop(n):
     """25000 -> '25.000'"""
     return f"{int(n):,}".replace(",", ".")
@@ -258,6 +267,7 @@ def registrar_transaccion(tx):
         p["status"], p["transaction_id"] = status, tx.get("id")
         if status == "APPROVED" and not p.get("correos_enviados"):
             p["correos_enviados"] = True
+            p["pagado"] = ahora().isoformat(timespec="seconds")
             enviar = dict(p)
         guardar_pedidos(pedidos)
     if enviar:
@@ -285,7 +295,7 @@ def wompi_iniciar():
         pedidos = cargar_pedidos()
         pedidos[ref] = {"ref": ref, "cliente": cliente, "items": items, "subtotal": subtotal,
                         "envio": envio, "total": total, "amount_in_cents": centavos,
-                        "status": "PENDING", "creado": datetime.now().isoformat(timespec="seconds")}
+                        "status": "PENDING", "creado": ahora().isoformat(timespec="seconds")}
         guardar_pedidos(pedidos)
 
     return jsonify(ok=True, reference=ref, amountInCents=centavos,
@@ -329,8 +339,8 @@ def gracias():
 
     if estado == "APPROVED":
         icono, titulo = "✅", "¡Pago aprobado!"
-        mensaje = ("💬 <strong>Próximo paso:</strong> Te enviamos la confirmación a tu correo "
-                   "y te contactaremos por WhatsApp para coordinar la entrega.")
+        mensaje = ("📦 <strong>¡Gracias por comprar!</strong> Te enviamos la confirmación a tu correo. "
+                   "Tu pedido se enviará a la dirección que registraste y llegará en <strong>máximo 2 días</strong>.")
     elif estado == "PENDING":
         icono, titulo = "⏳", "Pago en proceso"
         mensaje = "Tu pago está siendo procesado. Cuando se apruebe te llegará la confirmación a tu correo."
@@ -343,7 +353,7 @@ def gracias():
         mensaje = ("No pudimos confirmar el estado del pago todavía. "
                    "Si se realizó el cobro, escríbenos por WhatsApp con tu referencia.")
 
-    return pagina("gracias.html", order_id=ref, fecha=datetime.now().strftime("%d/%m/%Y · %I:%M %p"),
+    return pagina("gracias.html", order_id=ref, fecha=ahora().strftime("%d/%m/%Y · %I:%M %p"),
                   whatsapp_number=WHATSAPP_NUMBER, icono=icono, titulo=titulo, mensaje=mensaje)
 
 
@@ -382,22 +392,28 @@ def tabla_items(items):
 def enviar_correos(p):
     c, ref = p["cliente"], p["ref"]
     envio = "GRATIS" if p["envio"] == 0 else f"${cop(p['envio'])} COP"
-    fecha = datetime.now().strftime("%d/%m/%Y %I:%M %p")
+    fecha = ahora().strftime("%d/%m/%Y %I:%M %p")
 
     # 1. Al cliente
-    enviar_correo(c["email"], f"✅ ¡Gracias por tu compra en UmiClean! #{ref}", f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+    enviar_correo(c["email"], f"✅ ¡Gracias por tu compra en UmiClean! Pedido #{ref}", f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">
       <div style="background:#0d2b52;padding:32px;text-align:center;border-radius:12px 12px 0 0">
         <h1 style="color:white;margin:0">UmiClean</h1>
         <p style="color:#00c9a7;margin:8px 0 0">Oxígeno Activo · Sin Cloro</p>
       </div>
       <div style="background:#f7f9fc;padding:32px;border-radius:0 0 12px 12px">
-        <h2 style="color:#0d2b52">¡Gracias por tu compra, {c['nombre']}! 🎉</h2>
-        <p style="color:#555">Tu pago fue aprobado. Te contactaremos por WhatsApp para coordinar la entrega.</p>
-        <p style="color:#888;font-size:.85rem">Referencia <b style="color:#0d2b52">#{ref}</b> · {fecha}</p>
-        <p style="color:#2e7d32"><b>📍 Envío a:</b> {c['direccion']}, {c['ciudad']} · 📱 {c['celular']}</p>
+        <h2 style="color:#0d2b52;margin-top:0">¡Gracias por comprar, {c['nombre']}! 🎉</h2>
+        <p>Recibimos tu pago y ya estamos preparando tu pedido.</p>
+        <div style="background:#e8f8f4;border-left:4px solid #00c9a7;border-radius:0 10px 10px 0;padding:16px 18px;margin:20px 0">
+          <p style="margin:0 0 6px;color:#0d2b52"><b>🚚 Tu pedido se enviará a:</b></p>
+          <p style="margin:0 0 10px">{c['direccion']}, {c['ciudad']}</p>
+          <p style="margin:0;color:#0d2b52"><b>📦 En máximo 2 días llegará tu pedido.</b></p>
+        </div>
+        <p style="color:#888;font-size:.85rem">Número de pedido <b style="color:#0d2b52">#{ref}</b> · {fecha}</p>
         {tabla_items(p['items'])}
         <p style="color:#0d2b52"><b>Envío:</b> {envio}<br><b>TOTAL PAGADO: ${cop(p['total'])} COP</b></p>
+        <p style="font-size:.9rem;color:#555">¿Alguna duda? Escríbenos por WhatsApp al
+          <a href="https://wa.me/{WHATSAPP_NUMBER}" style="color:#1a56a0;font-weight:bold">+57 310 696 6593</a>.</p>
         <p style="text-align:center;color:#888;font-size:.8rem;margin-top:24px">UmiClean · {CITY} · umiclean.co</p>
       </div>
     </div>""")
@@ -414,6 +430,122 @@ def enviar_correos(p):
       <p style="font-size:1.1rem;color:#0d2b52"><b>TOTAL: ${cop(p['total'])} COP</b> · Envío: {envio}</p>
       <a href="{wa}" style="display:inline-block;background:#25d366;color:white;padding:14px 24px;border-radius:999px;font-weight:700;text-decoration:none">💬 Escribirle por WhatsApp</a>
     </div>""")
+
+
+# =========================
+# REPORTE DIARIO 9:00 PM — pedidos pagados pendientes por enviar
+# =========================
+HORA_REPORTE = 21  # 9 p. m. hora Colombia
+# Clave para los botones "Marcar como enviado" del correo
+ADMIN_KEY = os.environ.get("ADMIN_KEY") or WOMPI_INTEGRITY_SECRET
+REPORTE_FILE = os.path.join(os.path.dirname(PEDIDOS_FILE) or ".", "ultimo_reporte.txt")
+SITE_URL = os.environ.get("SITE_URL", "https://www.umiclean.co")
+
+
+def firma_admin(texto):
+    return hmac.new(ADMIN_KEY.encode(), texto.encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def pendientes_por_enviar():
+    pedidos = cargar_pedidos()
+    lista = [p for p in pedidos.values() if p.get("status") == "APPROVED" and not p.get("enviado")]
+    return sorted(lista, key=lambda p: p.get("pagado") or p.get("creado", ""))
+
+
+def enviar_reporte_diario():
+    lista = pendientes_por_enviar()
+    hoy = ahora().strftime("%d/%m/%Y")
+    total = sum(p["total"] for p in lista)
+
+    if not lista:
+        cuerpo = """<div style="background:#e8f8f4;border-radius:12px;padding:28px;text-align:center">
+          <p style="font-size:1.1rem;margin:0;color:#0d2b52"><b>✅ No hay pedidos pendientes por enviar.</b></p>
+          <p style="margin:8px 0 0;color:#555">Todo está al día.</p></div>"""
+    else:
+        bloques = []
+        for i, p in enumerate(lista, 1):
+            c = p["cliente"]
+            try:
+                pagado = datetime.fromisoformat(p.get("pagado") or p["creado"]).strftime("%d/%m %I:%M %p")
+            except Exception:
+                pagado = ""
+            prods = "<br>".join(f"• {it['name']} x{it['qty']}" for it in p["items"])
+            link = f"{SITE_URL}/admin/enviado/{p['ref']}?k={firma_admin(p['ref'])}"
+            wa = f"https://wa.me/57{c['celular']}"
+            bloques.append(f"""
+            <div style="border:1px solid #d9e2ef;border-radius:12px;padding:18px 20px;margin:0 0 14px;background:white">
+              <p style="margin:0 0 8px;color:#0d2b52;font-size:1.05rem"><b>{i}. {c['nombre']}</b>
+                <span style="color:#888;font-size:.85rem;font-weight:normal"> · #{p['ref']} · pagado {pagado}</span></p>
+              <p style="margin:0 0 4px">📍 <b>{c['direccion']}, {c['ciudad']}</b></p>
+              <p style="margin:0 0 4px">📱 <a href="{wa}" style="color:#1a56a0">{c['celular']}</a> · ✉️ {c['email']}</p>
+              <p style="margin:8px 0;color:#333">{prods}</p>
+              <p style="margin:0 0 12px;color:#0d2b52"><b>${cop(p['total'])} COP</b>
+                · Envío: {"GRATIS" if p['envio'] == 0 else "$" + cop(p['envio'])}</p>
+              <a href="{link}" style="display:inline-block;background:#00c9a7;color:#0d2b52;padding:10px 18px;border-radius:999px;font-weight:bold;text-decoration:none">✅ Marcar como enviado</a>
+            </div>""")
+        cuerpo = "".join(bloques)
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;background:#f7f9fc;padding:24px;border-radius:12px;color:#333">
+      <h2 style="color:#0d2b52;margin:0 0 4px">📦 Pedidos por enviar — {hoy}</h2>
+      <p style="margin:0 0 20px;color:#555">{len(lista)} pedido(s) pagado(s) pendiente(s) · Total ${cop(total)} COP</p>
+      {cuerpo}
+      <p style="color:#888;font-size:.8rem;margin-top:20px">Cuando despaches un pedido, dale "Marcar como enviado" y no vuelve a salir en este correo.</p>
+    </div>"""
+    enviar_correo(SMTP_USER, f"📦 UmiClean — {len(lista)} pedido(s) por enviar · {hoy}", html)
+
+
+@app.route("/admin/enviado/<ref>")
+def marcar_enviado(ref):
+    if not hmac.compare_digest(request.args.get("k", ""), firma_admin(ref)):
+        abort(403)
+    with _lock:
+        pedidos = cargar_pedidos()
+        p = pedidos.get(ref)
+        if not p:
+            abort(404)
+        p["enviado"] = ahora().isoformat(timespec="seconds")
+        guardar_pedidos(pedidos)
+    return (f"<div style='font-family:Arial;max-width:480px;margin:80px auto;text-align:center'>"
+            f"<h2 style='color:#0d2b52'>✅ Pedido #{ref} marcado como enviado</h2>"
+            f"<p>{p['cliente']['nombre']} · {p['cliente']['direccion']}, {p['cliente']['ciudad']}</p>"
+            f"<p style='color:#888'>Ya no aparecerá en el reporte de las 9 p. m.</p></div>")
+
+
+@app.route("/admin/reporte")
+def reporte_manual():
+    """Para probar: /admin/reporte?k=<firma de 'reporte'> manda el reporte ahora mismo."""
+    if not hmac.compare_digest(request.args.get("k", ""), firma_admin("reporte")):
+        abort(403)
+    enviar_reporte_diario()
+    return "Reporte enviado a " + SMTP_USER
+
+
+def _ya_se_envio(fecha):
+    try:
+        with open(REPORTE_FILE) as f:
+            return f.read().strip() == fecha
+    except Exception:
+        return False
+
+
+def _programador():
+    """Revisa cada minuto; a las 9 p. m. (o apenas arranque si ya pasó la hora) manda el reporte una vez al día."""
+    while True:
+        try:
+            t = ahora()
+            fecha = t.strftime("%Y-%m-%d")
+            if t.hour >= HORA_REPORTE and not _ya_se_envio(fecha):
+                with open(REPORTE_FILE, "w") as f:
+                    f.write(fecha)
+                enviar_reporte_diario()
+        except Exception as e:
+            print(f"Error en reporte diario: {e}")
+        time.sleep(60)
+
+
+if os.environ.get("REPORTE_DIARIO", "1") == "1":
+    threading.Thread(target=_programador, daemon=True).start()
 
 
 if __name__ == "__main__":
