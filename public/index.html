@@ -28,7 +28,7 @@
       backdrop-filter:blur(14px);
       border-bottom:1px solid var(--line);
     }
-    .logo{font-family:"Syne",sans-serif;font-weight:800;font-size:1.5rem;color:var(--navy);display:flex;align-items:center;gap:8px}
+    .logo{font-family:"Syne",sans-serif;font-weight:800;font-size:1.5rem;color:var(--navy);display:flex;align-items:center;gap:8px;text-decoration:none;cursor:pointer}
     .logo-dot{width:10px;height:10px;border-radius:50%;background:var(--accent);display:inline-block}
     .nav-links{display:flex;align-items:center;gap:26px;font-weight:500;font-size:.95rem;color:var(--muted)}
     .nav-links a:hover{color:var(--blue)}
@@ -179,7 +179,7 @@
 <body>
 
 <nav>
-  <div class="logo"><span class="logo-dot"></span>UmiClean</div>
+  <a href="/" class="logo" title="Ir al inicio"><span class="logo-dot"></span>UmiClean</a>
   <div class="nav-links">
     <a href="#productos">Productos</a>
     <a href="#promos">Promociones</a>
