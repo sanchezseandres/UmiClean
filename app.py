@@ -339,8 +339,8 @@ def gracias():
 
     if estado == "APPROVED":
         icono, titulo = "✅", "¡Pago aprobado!"
-        mensaje = ("📦 <strong>¡Gracias por comprar!</strong> Te enviamos la confirmación a tu correo. "
-                   "Tu pedido se enviará a la dirección que registraste y llegará en <strong>máximo 2 días</strong>.")
+        mensaje = ("💬 <strong>Próximo paso:</strong> Te enviamos la confirmación a tu correo "
+                   "y te contactaremos por WhatsApp para coordinar la entrega.")
     elif estado == "PENDING":
         icono, titulo = "⏳", "Pago en proceso"
         mensaje = "Tu pago está siendo procesado. Cuando se apruebe te llegará la confirmación a tu correo."
@@ -465,10 +465,7 @@ def enviar_reporte_diario():
         bloques = []
         for i, p in enumerate(lista, 1):
             c = p["cliente"]
-            try:
-                pagado = datetime.fromisoformat(p.get("pagado") or p["creado"]).strftime("%d/%m %I:%M %p")
-            except Exception:
-                pagado = ""
+            pagado = (p.get("pagado") or p.get("creado", ""))[:16].replace("T", " ")
             prods = "<br>".join(f"• {it['name']} x{it['qty']}" for it in p["items"])
             link = f"{SITE_URL}/admin/enviado/{p['ref']}?k={firma_admin(p['ref'])}"
             wa = f"https://wa.me/57{c['celular']}"
