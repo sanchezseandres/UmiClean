@@ -125,6 +125,41 @@ def politica(slug):
     return pagina("politica.html", titulo=POLITICAS[slug], contenido=leer(f"politicas/{slug}.html"))
 
 
+# =========================
+# BLOG — para agregar un artículo: crea public/blog/<slug>.html y añádelo aquí
+# =========================
+BLOG = {
+    "percarbonato": {
+        "kicker": "Guía completa",
+        "titulo": "Percarbonato de sodio: qué es, para qué sirve y cómo usarlo",
+        "resumen": "El ingrediente detrás de los blanqueadores sin cloro. Te explicamos cómo funciona y cómo sacarle el máximo provecho en la ropa y en la casa.",
+    },
+    "oxigeno-activo": {
+        "kicker": "Limpieza sin cloro",
+        "titulo": "Oxígeno activo: para qué sirve y por qué es mejor que el cloro",
+        "resumen": "Blanquea, quita manchas y elimina olores sin dañar tu ropa. Así funciona y así lo usas con los productos UmiClean.",
+    },
+}
+
+
+@app.route("/blog")
+def blog():
+    lista = "".join(
+        f'<a class="post" href="/blog/{slug}"><div class="kicker">{a["kicker"]}</div>'
+        f'<h2>{a["titulo"]}</h2><p>{a["resumen"]}</p><span class="leer">Leer artículo →</span></a>'
+        for slug, a in BLOG.items())
+    return pagina("blog.html", kicker="Blog UmiClean", titulo="Aprende a limpiar mejor, sin cloro",
+                  resumen="Guías prácticas sobre oxígeno activo, percarbonato y trucos para tu ropa y tu casa.",
+                  contenido=f'<div class="lista">{lista}</div>', es_articulo=False)
+
+
+@app.route("/blog/<slug>")
+def articulo(slug):
+    if slug not in BLOG:
+        abort(404)
+    return pagina("blog.html", **BLOG[slug], contenido=leer(f"blog/{slug}.html"), es_articulo=True)
+
+
 # Links viejos
 @app.route("/policies/<viejo>")
 def politica_vieja(viejo):

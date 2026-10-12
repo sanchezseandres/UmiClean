@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>{{ titulo }} · Blog UmiClean</title>
+  <meta name="description" content="{{ resumen }}"/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    :root{--navy:#0d2b52;--blue:#1a56a0;--teal:#00c9a7;--muted:#5a6d84;--bg:#f7f9fc;--line:rgba(13,43,82,.10)}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:"Inter",sans-serif;background:var(--bg);color:#2b3b52;line-height:1.75}
+    a{color:inherit}
+    header{background:var(--navy);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .logo{color:white;font-family:"Syne",sans-serif;font-weight:800;font-size:1.35rem;text-decoration:none}
+    .logo span{color:var(--teal)}
+    header nav{display:flex;gap:18px;font-size:.92rem}
+    header nav a{color:rgba(255,255,255,.8);text-decoration:none;font-weight:600}
+    header nav a:hover,header nav a.on{color:var(--teal)}
+    .hero{background:linear-gradient(160deg,#0d2b52 0%,#1a4080 60%,#0a1e38 100%);color:white;padding:64px 24px 72px;text-align:center}
+    .kicker{font-size:.72rem;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:var(--teal)}
+    .hero h1{font-family:"Syne",sans-serif;font-weight:900;font-size:clamp(2rem,5vw,3rem);line-height:1.1;margin:12px auto 14px;max-width:760px}
+    .hero p{color:rgba(255,255,255,.75);max-width:620px;margin:0 auto;font-size:1.05rem}
+    main{max-width:760px;margin:-36px auto 80px;padding:0 20px}
+    .card{background:white;border-radius:24px;border:1px solid var(--line);box-shadow:0 12px 40px rgba(13,43,82,.08);padding:40px 36px}
+    @media(max-width:600px){.card{padding:28px 20px}}
+    article h2{font-family:"Syne",sans-serif;color:var(--navy);font-size:1.45rem;margin:34px 0 10px;line-height:1.25}
+    article h2:first-child{margin-top:0}
+    article h3{color:var(--navy);font-size:1.05rem;margin:20px 0 6px}
+    article p{margin:0 0 14px}
+    article ul,article ol{margin:0 0 16px 22px}
+    article li{margin-bottom:6px}
+    article strong{color:var(--navy)}
+    .dato{background:#e8f8f4;border-left:4px solid var(--teal);border-radius:0 14px 14px 0;padding:16px 20px;margin:20px 0;color:#1f5e50}
+    .ojo{background:#fff4e5;border-left:4px solid #f5a623;border-radius:0 14px 14px 0;padding:16px 20px;margin:20px 0;color:#7a4b00}
+    .tabla{width:100%;border-collapse:collapse;margin:16px 0 22px;font-size:.93rem}
+    .tabla th{background:var(--navy);color:white;text-align:left;padding:10px 12px}
+    .tabla td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+    .cta{margin-top:34px;background:var(--navy);color:white;border-radius:20px;padding:28px;text-align:center}
+    .cta p{color:rgba(255,255,255,.8);margin-bottom:16px}
+    .btn{display:inline-block;background:var(--teal);color:var(--navy);font-weight:800;padding:13px 28px;border-radius:999px;text-decoration:none}
+    .lista{display:grid;gap:20px}
+    .post{display:block;background:white;border-radius:22px;border:1px solid var(--line);box-shadow:0 8px 28px rgba(13,43,82,.07);padding:28px;text-decoration:none;transition:transform .2s,box-shadow .2s}
+    .post:hover{transform:translateY(-3px);box-shadow:0 16px 40px rgba(13,43,82,.12)}
+    .post .kicker{color:#3a9bd5}
+    .post h2{font-family:"Syne",sans-serif;color:var(--navy);font-size:1.35rem;line-height:1.25;margin:8px 0}
+    .post p{color:var(--muted);margin:0}
+    .post .leer{display:inline-block;margin-top:12px;color:var(--blue);font-weight:700}
+    .volver{text-align:center;margin-top:28px}
+    .volver a{color:var(--blue);font-weight:600}
+    footer{text-align:center;color:#8a9ab0;font-size:.85rem;padding:0 20px 40px}
+  </style>
+</head>
+<body>
+  <header>
+    <a class="logo" href="/">Umi<span>Clean</span></a>
+    <nav>
+      <a href="/#productos">Productos</a>
+      <a href="/#promos">Promociones</a>
+      <a href="/blog" class="on">Blog</a>
+    </nav>
+  </header>
+  <section class="hero">
+    <div class="kicker">{{ kicker }}</div>
+    <h1>{{ titulo }}</h1>
+    <p>{{ resumen }}</p>
+  </section>
+  <main>
+    {{ contenido|safe }}
+    <p class="volver">{% if es_articulo %}<a href="/blog">← Ver todos los artículos</a> · {% endif %}<a href="/">Ir a la tienda</a></p>
+  </main>
+  <footer>© UmiClean · Bogotá, Colombia · Limpieza con oxígeno activo, sin cloro</footer>
+</body>
+</html>
