@@ -61,12 +61,19 @@ WOMPI_API = ("https://sandbox.wompi.co/v1" if WOMPI_PUBLIC_KEY.startswith("pub_t
              else "https://production.wompi.co/v1")
 
 # =========================
-# CORREO (Titan)
+# CORREO
 # =========================
+# Railway (plan Hobby) bloquea SMTP, así que se usa una API por HTTPS si está configurada:
+#   RESEND_API_KEY  → resend.com  (recomendado)
+#   BREVO_API_KEY   → brevo.com
+# Si no hay ninguna, intenta SMTP con Titan (solo funciona en Railway Pro).
 SMTP_SERVER = "smtp.titan.email"
 SMTP_PORT = 465
 SMTP_USER = "noreply@umiclean.co"
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+CORREO_ADMIN = os.environ.get("CORREO_ADMIN", SMTP_USER)  # adónde llegan los avisos y el reporte
 
 
 # =========================
@@ -360,19 +367,45 @@ def gracias():
 # =========================
 # CORREOS
 # =========================
-def enviar_correo(para, asunto, html):
-    if not SMTP_PASSWORD:
-        print("SMTP_PASSWORD no configurada: no se envió el correo")
-        return
-    try:
+def _post_json(url, datos, headers):
+    req = urllib.request.Request(url, data=json.dumps(datos).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", **headers})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.status
+
+
+def _enviar_ahora(para, asunto, html):
+    remitente = f"UmiClean <{SMTP_USER}>"
+    if RESEND_API_KEY:
+        _post_json("https://api.resend.com/emails",
+                   {"from": remitente, "to": [para], "subject": asunto, "html": html},
+                   {"Authorization": f"Bearer {RESEND_API_KEY}"})
+    elif BREVO_API_KEY:
+        _post_json("https://api.brevo.com/v3/smtp/email",
+                   {"sender": {"name": "UmiClean", "email": SMTP_USER}, "to": [{"email": para}],
+                    "subject": asunto, "htmlContent": html},
+                   {"api-key": BREVO_API_KEY})
+    elif SMTP_PASSWORD:
         msg = MIMEMultipart("alternative")
-        msg["Subject"], msg["From"], msg["To"] = asunto, f"UmiClean <{SMTP_USER}>", para
+        msg["Subject"], msg["From"], msg["To"] = asunto, remitente, para
         msg.attach(MIMEText(html, "html"))
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=20) as s:
             s.login(SMTP_USER, SMTP_PASSWORD)
             s.sendmail(SMTP_USER, para, msg.as_string())
-    except Exception as e:
-        print(f"Error enviando correo a {para}: {e}")
+    else:
+        print("Correo no configurado (falta RESEND_API_KEY): no se envió", asunto)
+        return
+    print(f"Correo enviado a {para}: {asunto}")
+
+
+def enviar_correo(para, asunto, html):
+    """Envía en segundo plano: nunca deja colgada la página del cliente."""
+    def tarea():
+        try:
+            _enviar_ahora(para, asunto, html)
+        except Exception as e:
+            print(f"Error enviando correo a {para}: {e}")
+    threading.Thread(target=tarea, daemon=True).start()
 
 
 def tabla_items(items):
@@ -421,7 +454,7 @@ def enviar_correos(p):
     # 2. A UmiClean
     wa = (f"https://wa.me/57{c['celular']}?text=" +
           urllib.request.quote(f"Hola {c['nombre']}, tu pedido UmiClean #{ref} fue confirmado y está en camino 🚚 ¡Gracias por tu compra!"))
-    enviar_correo(SMTP_USER, f"🛒 Nuevo pedido #{ref} — {c['nombre']} — ${cop(p['total'])} COP", f"""
+    enviar_correo(CORREO_ADMIN, f"🛒 Nuevo pedido #{ref} — {c['nombre']} — ${cop(p['total'])} COP", f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;border:2px solid #0d2b52;border-radius:12px">
       <h2 style="color:#0d2b52">🛒 Nuevo pedido PAGADO</h2>
       <p>Referencia: <b>{ref}</b> · {fecha} · Wompi: {p.get('transaction_id', '')}</p>
@@ -489,7 +522,7 @@ def enviar_reporte_diario():
       {cuerpo}
       <p style="color:#888;font-size:.8rem;margin-top:20px">Cuando despaches un pedido, dale "Marcar como enviado" y no vuelve a salir en este correo.</p>
     </div>"""
-    enviar_correo(SMTP_USER, f"📦 UmiClean — {len(lista)} pedido(s) por enviar · {hoy}", html)
+    enviar_correo(CORREO_ADMIN, f"📦 UmiClean — {len(lista)} pedido(s) por enviar · {hoy}", html)
 
 
 @app.route("/admin/enviado/<ref>")
@@ -515,7 +548,7 @@ def reporte_manual():
     if not hmac.compare_digest(request.args.get("k", ""), firma_admin("reporte")):
         abort(403)
     enviar_reporte_diario()
-    return "Reporte enviado a " + SMTP_USER
+    return "Reporte enviado a " + CORREO_ADMIN
 
 
 def _ya_se_envio(fecha):
