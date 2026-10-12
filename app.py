@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-from flask import Flask, render_template_string, redirect, request, jsonify, send_file, abort
+from flask import Flask, render_template_string, redirect, request, jsonify, abort
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC = os.path.join(BASE_DIR, "public")
@@ -187,14 +187,6 @@ def politica_vieja(viejo):
 @app.route("/pago")
 def pago():
     return redirect(f"https://wa.me/{WHATSAPP_NUMBER}?text=Hola%20UmiClean%2C%20quiero%20hacer%20un%20pedido.%20%F0%9F%9B%92")
-
-
-@app.route("/portafolio")
-def portafolio():
-    pdf = os.path.join(BASE_DIR, "UmiClean_Portafolio.pdf")
-    if os.path.exists(pdf):
-        return send_file(pdf, as_attachment=True, download_name="UmiClean_Portafolio.pdf")
-    return redirect("/")
 
 
 @app.route("/health")
