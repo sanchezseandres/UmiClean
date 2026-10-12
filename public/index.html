@@ -36,6 +36,7 @@
     .nav-cta:hover{background:var(--blue)}
     @media(max-width:700px){.nav-links{display:none}}
     .nav-right{display:flex;align-items:center;gap:10px}
+    @media(max-width:760px){.medias-grid{grid-template-columns:1fr!important;gap:28px!important}}
     @media(max-width:900px){.blog-grid{grid-template-columns:1fr!important}.blog-grid article{grid-row:auto!important;min-height:380px!important}}
     .nav-blog{border:2px solid var(--navy);color:var(--navy);padding:8px 18px;border-radius:999px;font-weight:700;font-size:.9rem}
     .nav-blog:hover{background:var(--navy);color:white}
@@ -484,16 +485,8 @@
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;max-width:900px;margin:0 auto 48px" class="medias-grid">
       <!-- Antes/Después -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div style="border-radius:16px;overflow:hidden;border:3px solid #ff6b6b">
-          <div style="background:#ff6b6b;color:white;text-align:center;padding:8px;font-weight:800;font-size:.85rem">■ ANTES</div>
-          <div style="background:#f5f5f5;height:160px;display:flex;align-items:center;justify-content:center;font-size:3rem">🧦</div>
-        </div>
-        <div style="border-radius:16px;overflow:hidden;border:3px solid #00c9a7">
-          <div style="background:#00c9a7;color:white;text-align:center;padding:8px;font-weight:800;font-size:.85rem">■ DESPUÉS</div>
-          <div style="background:#f5f5f5;height:160px;display:flex;align-items:center;justify-content:center;font-size:3rem">✨</div>
-        </div>
-      </div>
+      <img src="/img/medias-antes-despues.jpg" alt="Medias antes y después de lavarlas con Oxígeno Activo UmiClean" loading="lazy"
+           style="width:100%;border-radius:20px;box-shadow:0 14px 40px rgba(13,43,82,.18);display:block"/>
 
       <!-- Pasos -->
       <div>
