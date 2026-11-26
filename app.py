@@ -271,6 +271,7 @@ def registrar_transaccion(tx):
         guardar_pedidos(pedidos)
     if enviar:
         enviar_correos(enviar)
+        threading.Thread(target=lambda: auto_cotizar_y_avisar(ref), daemon=True).start()
     return p
 
 
@@ -454,6 +455,7 @@ def enviar_correos(p):
       {tabla_items(p['items'])}
       <p style="font-size:1.1rem;color:#0d2b52"><b>TOTAL: ${cop(p['total'])} COP</b> · Envío: {envio}</p>
       <a href="{wa}" style="display:inline-block;background:#25d366;color:white;padding:14px 24px;border-radius:999px;font-weight:700;text-decoration:none">💬 Escribirle por WhatsApp</a>
+      <a href="{SITE_URL}/admin/pedidos?k={firma_admin('panel')}" style="display:inline-block;background:#0d2b52;color:white;padding:14px 24px;border-radius:999px;font-weight:700;text-decoration:none;margin-left:8px">📦 Cotizar envío</a>
     </div>""")
 
 
@@ -512,6 +514,7 @@ def enviar_reporte_diario():
       <h2 style="color:#0d2b52;margin:0 0 4px">📦 Pedidos por enviar — {hoy}</h2>
       <p style="margin:0 0 20px;color:#555">{len(lista)} pedido(s) pagado(s) pendiente(s) · Total ${cop(total)} COP</p>
       {cuerpo}
+      <p><a href="{SITE_URL}/admin/pedidos?k={firma_admin('panel')}" style="display:inline-block;background:#0d2b52;color:white;padding:12px 22px;border-radius:999px;font-weight:bold;text-decoration:none">📦 Abrir panel de pedidos y envíos</a></p>
       <p style="color:#888;font-size:.8rem;margin-top:20px">Cuando despaches un pedido, dale "Marcar como enviado" y no vuelve a salir en este correo.</p>
     </div>"""
     enviar_correo(CORREO_ADMIN, f"📦 UmiClean — {len(lista)} pedido(s) por enviar · {hoy}", html)
@@ -532,6 +535,248 @@ def marcar_enviado(ref):
             f"<h2 style='color:#0d2b52'>✅ Pedido #{ref} marcado como enviado</h2>"
             f"<p>{p['cliente']['nombre']} · {p['cliente']['direccion']}, {p['cliente']['ciudad']}</p>"
             f"<p style='color:#888'>Ya no aparecerá en el reporte de las 9 p. m.</p></div>")
+
+
+# =========================
+# AVISO POR TELEGRAM + COTIZACIÓN AUTOMÁTICA
+# =========================
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+
+def enviar_telegram(texto, botones=None):
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        print("Telegram no configurado:", texto[:80])
+        return
+    body = {"chat_id": TELEGRAM_CHAT_ID, "text": texto, "parse_mode": "HTML", "disable_web_page_preview": True}
+    if botones:
+        body["reply_markup"] = {"inline_keyboard": [[{"text": t, "url": u}] for t, u in botones]}
+    try:
+        _post_json(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", body, {})
+    except Exception as e:
+        print(f"Error enviando Telegram: {e}")
+
+
+def recomendada(opciones):
+    """La más barata con entrega a domicilio; si no hay, la más barata."""
+    dom = [o for o in opciones if not o.get("solo_oficina")]
+    return (dom or opciones or [None])[0]
+
+
+def auto_cotizar_y_avisar(ref):
+    import mipaquete as mp
+    p = cargar_pedidos().get(ref)
+    if not p:
+        return
+    c = p["cliente"]
+    panel = f"{SITE_URL}/admin/pedidos?k={firma_admin('panel')}"
+    cab = (f"🛒 <b>Nuevo pedido pagado</b> #{ref}\n👤 {c['nombre']} · {c['celular']}\n📍 {c['direccion']}, {c['ciudad']}\n"
+           + "\n".join(f"• {it['qty']} × {it['name']}" for it in p["items"])
+           + f"\n💰 Total pagado: ${cop(p['total'])}")
+    cfg = mp.cargar_config(PEDIDOS_FILE)
+    try:
+        if not cfg.get("apikey"):
+            raise RuntimeError("Mipaquete no está conectado")
+        dane, _ = mp.buscar_dane(cfg["apikey"], c["ciudad"])
+        if not dane:
+            raise RuntimeError(f"no reconocí la ciudad '{c['ciudad']}'")
+        opciones = mp.cotizar(cfg["apikey"], cfg.get("origen_dane", "11001000"), dane, p["items"], p["subtotal"])
+        rec = recomendada(opciones)
+        if not rec:
+            raise RuntimeError("ninguna transportadora cubre esa ruta")
+        _guardar_campos(ref, envio_dane=dane, envio_cotizacion=opciones, envio_cotizado=ahora().isoformat(timespec="minutes"))
+        firma = firma_admin(f"aprobar:{ref}:{rec['empresa_id']}")
+        aprobar = f"{SITE_URL}/admin/aprobar/{ref}?e={rec['empresa_id']}&k={firma}"
+        enviar_telegram(cab + f"\n\n🚚 Por Mipaquete con <b>{rec['empresa']}</b> vale <b>${cop(rec['costo'])}</b> (~{rec['horas']} h).\n¿Lo apruebas?",
+                        [(f"✅ Aprobar {rec['empresa']} ${cop(rec['costo'])}", aprobar), ("📦 Ver otras opciones", panel)])
+    except Exception as e:
+        enviar_telegram(cab + f"\n\n⚠️ No pude cotizar automático: {e}.", [("📦 Abrir panel", panel)])
+
+
+def _guardar_campos(ref, **campos):
+    with _lock:
+        pedidos = cargar_pedidos()
+        if ref in pedidos:
+            pedidos[ref].update(campos)
+            guardar_pedidos(pedidos)
+
+
+@app.route("/admin/aprobar/<ref>", methods=["GET", "POST"])
+def aprobar_envio(ref):
+    import mipaquete as mp
+    emp = request.values.get("e", "")
+    if not hmac.compare_digest(request.values.get("k", ""), firma_admin(f"aprobar:{ref}:{emp}")):
+        abort(403)
+    p = cargar_pedidos().get(ref) or abort(404)
+    opt = next((o for o in p.get("envio_cotizacion", []) if o["empresa_id"] == emp), None) or abort(404)
+    caja = "font-family:Inter,Arial;max-width:460px;margin:60px auto;padding:0 16px;text-align:center"
+    if p.get("mp_code"):
+        return f"<div style='{caja}'><h2>✅ Ya está aprobado</h2><p>{p.get('envio_empresa')} · código Mipaquete {p['mp_code']}</p></div>"
+    if request.method == "GET":
+        return (f"<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'><div style='{caja}'>"
+                f"<h2 style='color:#0d2b52'>¿Aprobar envío?</h2><p><b>{p['cliente']['nombre']}</b><br>{p['cliente']['direccion']}, {p['cliente']['ciudad']}</p>"
+                f"<p style='font-size:1.3rem'>{opt['empresa']} · <b>${cop(opt['costo'])}</b></p><p style='color:#64748b'>Se paga con tu saldo de Mipaquete y se genera la guía.</p>"
+                f"<form method='post'><input type='hidden' name='e' value='{emp}'><input type='hidden' name='k' value='{request.values.get('k')}'>"
+                f"<button style='background:#00a88b;color:white;border:0;border-radius:999px;padding:14px 28px;font-size:1rem;font-weight:700'>✅ Sí, aprobar y generar guía</button></form></div>")
+    cfg = mp.cargar_config(PEDIDOS_FILE)
+    try:
+        if not cfg.get("remitente", {}).get("direccion"):
+            raise RuntimeError("faltan los datos de despacho en el panel")
+        code, _ = mp.crear_guia(cfg["apikey"], cfg, p, emp, p["envio_dane"])
+    except Exception as e:
+        return f"<div style='{caja}'><h2>⚠️ No se pudo generar la guía</h2><p>{e}</p><p><a href='{SITE_URL}/admin/pedidos?k={firma_admin('panel')}'>Abrir panel</a></p></div>", 500
+    _guardar_campos(ref, mp_code=code, envio_empresa=opt["empresa"], envio_costo=opt["costo"], enviado=ahora().isoformat(timespec="seconds"))
+    enviar_telegram(f"✅ Guía generada #{ref} · {opt['empresa']} ${cop(opt['costo'])} · código Mipaquete {code}")
+    return f"<div style='{caja}'><h2 style='color:#047857'>✅ Envío aprobado</h2><p>{opt['empresa']} · ${cop(opt['costo'])}<br>Código Mipaquete <b>{code}</b></p><p style='color:#64748b'>La guía queda en mipaquete.com › Mis envíos.</p></div>"
+
+
+# =========================
+# PANEL DE PEDIDOS + MIPAQUETE
+# =========================
+import mipaquete as mp
+from html import escape as esc
+
+
+def _token_panel():
+    return firma_admin("panel")
+
+
+def _check_panel():
+    k = request.values.get("k", "")
+    if not hmac.compare_digest(k, _token_panel()):
+        abort(403)
+    return k
+
+
+def _actualizar_pedido(ref, **campos):
+    with _lock:
+        pedidos = cargar_pedidos()
+        p = pedidos.get(ref)
+        if not p:
+            abort(404)
+        p.update(campos)
+        guardar_pedidos(pedidos)
+        return p
+
+
+PANEL_CSS = """<style>
+body{font-family:Inter,Arial,sans-serif;background:#f4f7fb;color:#1e293b;margin:0}
+.w{max-width:920px;margin:0 auto;padding:24px 16px 60px}
+h1{color:#0d2b52;font-size:1.5rem;margin:0 0 4px}h2{color:#0d2b52;font-size:1.1rem;margin:0 0 10px}
+.c{background:#fff;border:1px solid #dbe3ee;border-radius:14px;padding:18px 20px;margin:14px 0}
+.m{color:#64748b;font-size:.85rem}.ok{color:#047857;font-weight:700}.err{background:#fef2f2;color:#991b1b;border-radius:10px;padding:10px 14px}
+.msg{background:#ecfdf5;color:#065f46;border-radius:10px;padding:10px 14px}
+input,select{padding:9px 11px;border:1.5px solid #cbd5e1;border-radius:9px;font:inherit;width:100%;box-sizing:border-box}
+label{font-size:.8rem;font-weight:700;color:#334155;display:block;margin:8px 0 3px}
+button{background:#0d2b52;color:#fff;border:0;border-radius:999px;padding:10px 18px;font-weight:700;cursor:pointer;font:inherit}
+button.v{background:#00a88b}.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+table{width:100%;border-collapse:collapse;font-size:.9rem}td,th{padding:8px;border-bottom:1px solid #e2e8f0;text-align:left}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+</style>"""
+
+
+@app.route("/admin/pedidos", methods=["GET", "POST"])
+def panel_pedidos():
+    k = _check_panel()
+    cfg = mp.cargar_config(PEDIDOS_FILE)
+    msg = err = ""
+    accion = request.form.get("accion")
+    try:
+        if accion == "conectar":
+            cfg["apikey"] = mp.generar_apikey(request.form["email"].strip(), request.form["password"])
+            mp.guardar_config(PEDIDOS_FILE, cfg); msg = "Mipaquete conectado ✅"
+        elif accion == "remitente":
+            cfg["remitente"] = {x: request.form.get(x, "").strip() for x in
+                                ("nombre", "apellido", "celular", "email", "direccion", "nit", "tipo_nit")}
+            cfg["origen_dane"] = request.form.get("origen_dane", "11001000").strip() or "11001000"
+            cfg["recogida"] = request.form.get("recogida") == "1"
+            mp.guardar_config(PEDIDOS_FILE, cfg); msg = "Datos de despacho guardados ✅"
+        elif accion == "cotizar":
+            ref = request.form["ref"]; p = cargar_pedidos()[ref]
+            dane = request.form.get("dane", "").strip()
+            if not dane:
+                dane, nombre = mp.buscar_dane(cfg.get("apikey"), p["cliente"]["ciudad"])
+                if not dane:
+                    raise RuntimeError(f"No encontré la ciudad '{p['cliente']['ciudad']}'. Escribe el código DANE (8 dígitos).")
+            opciones = mp.cotizar(cfg.get("apikey"), cfg.get("origen_dane", "11001000"), dane, p["items"], p["subtotal"])
+            _actualizar_pedido(ref, envio_dane=dane, envio_cotizacion=opciones, envio_cotizado=ahora().isoformat(timespec="minutes"))
+            msg = f"Cotizado {ref}: {len(opciones)} opciones"
+        elif accion == "guia":
+            ref = request.form["ref"]; p = cargar_pedidos()[ref]
+            if p.get("mp_code"):
+                raise RuntimeError("Ese pedido ya tiene guía.")
+            if not cfg.get("remitente", {}).get("direccion"):
+                raise RuntimeError("Primero llena los datos de despacho (remitente).")
+            opt = next(o for o in p.get("envio_cotizacion", []) if o["empresa_id"] == request.form["empresa_id"])
+            code, texto = mp.crear_guia(cfg["apikey"], cfg, p, opt["empresa_id"], p["envio_dane"], request.form.get("cedula", "").strip())
+            _actualizar_pedido(ref, mp_code=code, envio_empresa=opt["empresa"], envio_costo=opt["costo"],
+                               enviado=ahora().isoformat(timespec="seconds"))
+            msg = f"Guía generada ✅ {opt['empresa']} · código Mipaquete {code}. Descárgala en mipaquete.com > Mis envíos."
+        elif accion == "manual":
+            _actualizar_pedido(request.form["ref"], enviado=ahora().isoformat(timespec="seconds"))
+            msg = "Marcado como enviado"
+    except Exception as e:
+        err = str(e)
+
+    conectado = bool(cfg.get("apikey"))
+    saldo = mp.saldo(cfg["apikey"]) if conectado else None
+    pedidos = cargar_pedidos()
+    pagados = sorted([p for p in pedidos.values() if p.get("status") == "APPROVED"],
+                     key=lambda p: p.get("pagado") or p.get("creado", ""), reverse=True)
+    pendientes = [p for p in pagados if not p.get("enviado")]
+    enviados = [p for p in pagados if p.get("enviado")][:15]
+    r = cfg.get("remitente", {})
+
+    def campo(n, lab, v="", t="text"):
+        return f'<div><label>{lab}</label><input name="{n}" type="{t}" value="{esc(str(v))}"></div>'
+
+    h = [f"<!doctype html><html lang='es'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Pedidos UmiClean</title>{PANEL_CSS}</head><body><div class='w'>",
+         f"<h1>📦 Pedidos UmiClean</h1><div class='m'>{len(pendientes)} por enviar · {ahora().strftime('%d/%m/%Y %I:%M %p')}</div>"]
+    if msg: h.append(f"<div class='c msg'>{esc(msg)}</div>")
+    if err: h.append(f"<div class='c err'>⚠️ {esc(err)}</div>")
+
+    if not conectado:
+        h.append(f"""<div class='c'><h2>1. Conectar Mipaquete</h2><p class='m'>Usa el mismo correo y contraseña con los que entras a mipaquete.com. No se guarda la contraseña, solo la llave que entrega Mipaquete.</p>
+        <form method='post'><input type='hidden' name='k' value='{k}'><input type='hidden' name='accion' value='conectar'>
+        <div class='g'>{campo('email','Correo Mipaquete','', 'email')}{campo('password','Contraseña','', 'password')}</div><p><button>Conectar</button></p></form></div>""")
+    else:
+        h.append(f"<div class='c'><span class='ok'>✅ Mipaquete conectado</span> <span class='m'>· Saldo: {('$' + cop(saldo)) if isinstance(saldo,(int,float)) else 'no disponible'}</span></div>")
+
+    h.append(f"""<details class='c' {'' if r.get('direccion') else 'open'}><summary><b>Datos de despacho (remitente)</b></summary>
+    <form method='post'><input type='hidden' name='k' value='{k}'><input type='hidden' name='accion' value='remitente'>
+    <div class='g'>{campo('nombre','Nombre',r.get('nombre',''))}{campo('apellido','Apellido',r.get('apellido',''))}{campo('celular','Celular',r.get('celular',''))}
+    {campo('email','Correo',r.get('email',''))}{campo('direccion','Dirección de recogida',r.get('direccion',''))}{campo('nit','Cédula o NIT',r.get('nit',''))}
+    <div><label>Tipo</label><select name='tipo_nit'>{''.join(f"<option {'selected' if r.get('tipo_nit','CC')==t else ''}>{t}</option>" for t in ('CC','NIT'))}</select></div>
+    {campo('origen_dane','Código DANE de origen',cfg.get('origen_dane','11001000'))}
+    <div><label>Recogida</label><select name='recogida'><option value='1' {'selected' if cfg.get('recogida',True) else ''}>Que pasen a recoger</option><option value='0' {'' if cfg.get('recogida',True) else 'selected'}>Lo llevo yo</option></select></div></div>
+    <p><button>Guardar</button></p></form></details>""")
+
+    h.append("<h2 style='margin-top:26px'>Por enviar</h2>")
+    if not pendientes:
+        h.append("<div class='c m'>No hay pedidos pendientes. 🎉</div>")
+    for p in pendientes:
+        c = p["cliente"]
+        prods = "<br>".join(f"{it['qty']} × {esc(it['name'])}" for it in p["items"])
+        pag = (p.get("pagado") or p.get("creado", ""))[:16].replace("T", " ")
+        h.append(f"""<div class='c'><div class='row' style='justify-content:space-between'><b>{esc(c['nombre'])}</b><span class='m'>#{p['ref']} · pagado {pag}</span></div>
+        <p style='margin:8px 0'>📍 <b>{esc(c['direccion'])}, {esc(c['ciudad'])}</b><br>📱 <a href='https://wa.me/57{esc(c['celular'])}'>{esc(c['celular'])}</a> · ✉️ {esc(c['email'])}</p>
+        <p class='m' style='margin:6px 0'>{prods}</p><p style='margin:6px 0'>Total pagado <b>${cop(p['total'])}</b> · Envío cobrado al cliente: {'GRATIS' if p['envio']==0 else '$'+cop(p['envio'])} · Peso aprox. {mp.peso_pedido(p['items'])} kg</p>
+        <form method='post' class='row'><input type='hidden' name='k' value='{k}'><input type='hidden' name='accion' value='cotizar'><input type='hidden' name='ref' value='{p['ref']}'>
+        <div style='width:170px'><label>DANE destino (opcional)</label><input name='dane' value='{esc(p.get('envio_dane',''))}' placeholder='auto'></div><button>💲 Cotizar envío</button></form>""")
+        if p.get("envio_cotizacion"):
+            filas = "".join(f"""<tr><td><b>{esc(str(o['empresa']))}</b>{' <span class=m>(solo oficina)</span>' if o.get('solo_oficina') else ''}</td><td>${cop(o['costo'])}</td><td>~{o['horas']} h</td>
+            <td><form method='post' onsubmit="return confirm('¿Generar guía con {esc(str(o['empresa']))} por ${cop(o['costo'])}? Se descuenta de tu saldo Mipaquete.')">
+            <input type='hidden' name='k' value='{k}'><input type='hidden' name='accion' value='guia'><input type='hidden' name='ref' value='{p['ref']}'><input type='hidden' name='empresa_id' value='{esc(str(o['empresa_id']))}'>
+            <input name='cedula' placeholder='Cédula cliente (opcional)' style='width:150px;display:inline-block'> <button class='v'>Pagar y generar guía</button></form></td></tr>""" for o in p["envio_cotizacion"][:6])
+            h.append(f"<table><tr><th>Transportadora</th><th>Costo</th><th>Tiempo</th><th></th></tr>{filas}</table>")
+        h.append(f"""<form method='post' style='margin-top:10px'><input type='hidden' name='k' value='{k}'><input type='hidden' name='accion' value='manual'><input type='hidden' name='ref' value='{p['ref']}'>
+        <button style='background:#94a3b8'>Ya lo envié por otro lado</button></form></div>""")
+
+    if enviados:
+        filas = "".join(f"<tr><td>{esc(p['cliente']['nombre'])}</td><td>{esc(p['cliente']['ciudad'])}</td><td>{esc(str(p.get('envio_empresa','—')))}</td><td>{p.get('mp_code','—')}</td><td>{p['enviado'][:10]}</td></tr>" for p in enviados)
+        h.append(f"<h2 style='margin-top:26px'>Enviados recientes</h2><div class='c'><table><tr><th>Cliente</th><th>Ciudad</th><th>Transportadora</th><th>Código</th><th>Fecha</th></tr>{filas}</table></div>")
+    h.append("</div></body></html>")
+    return "".join(h)
 
 
 @app.route("/admin/reporte")
